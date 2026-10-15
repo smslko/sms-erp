@@ -1,0 +1,17 @@
+# Optional: Render Blueprint (New > Blueprint). Fill the secret values in the Render dashboard.
+services:
+  - type: web
+    name: sms-erp-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CLIENT_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
