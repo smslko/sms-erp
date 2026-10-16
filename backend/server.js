@@ -7,6 +7,7 @@ import auth from './routes/auth.js';
 import api from './routes/api.js';
 import phase2 from './routes/phase2.js';
 import notifications from './routes/notifications.js';
+import { bootstrap } from './bootstrap.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -27,5 +28,6 @@ app.use((e, q, r, n) => {
 });
 
 mongoose.connect(process.env.MONGO_URI)
+  .then(bootstrap)
   .then(() => app.listen(process.env.PORT || 5000, () => console.log('API running')))
   .catch(e => { console.error('Mongo connection failed', e.message); process.exit(1); });

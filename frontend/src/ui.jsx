@@ -91,3 +91,9 @@ export function printDoc(title, html) {
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PRINT_CSS}</style></head><body>${html}<script>setTimeout(function(){print()},500)<\/script></body></html>`); w.document.close();
 }
 export const letterhead = c => `<div class="hd"><img src="${location.origin}/logo.jpg" alt=""><div><h2>${esc(c.name)}</h2><div style="font-size:12px">${esc(c.address)} · ${esc(c.phone)}</div><div style="font-size:12px">Affiliated: ${esc(c.affiliations)} · ${esc(c.accreditation)}</div></div></div>`;
+
+export function ThemeToggle() {
+  const [t, setT] = useState(document.documentElement.dataset.theme || 'light');
+  const flip = () => { const n = t === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = n; try { localStorage.setItem('theme', n); } catch {} setT(n); };
+  return <button type="button" className="btn o s" onClick={flip} aria-label="Switch between light and dark mode" title="Light / dark mode">{t === 'dark' ? '☀️ Light' : '🌙 Dark'}</button>;
+}

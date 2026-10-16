@@ -24,11 +24,13 @@ R.get('/captcha', (q, r) => {
 });
 
 R.post('/login', loginLimit, h(async (q, r) => {
-  const { username = '', password = '', captcha = '', token = '' } = q.body;
+  const { username = '', password = '', captcha = '', token = '', as = '' } = q.body;
   try { const c = jwt.verify(token, process.env.JWT_SECRET); if (c.h !== hash(captcha) || used.has(c.j)) throw 0; used.set(c.j, Date.now() + 300000); }
   catch { return r.status(400).json({ message: 'Wrong or expired CAPTCHA' }); }
   const u = await User.findOne({ username: username.toLowerCase().trim() });
   if (!u || !u.active || !(await bcrypt.compare(password, u.password))) return r.status(401).json({ message: 'Invalid username or password' });
+  if (as === 'student' && u.role !== 'student') return r.status(403).json({ message: 'This is a staff account. Choose the Teacher / Staff tab.' });
+  if (as === 'staff' && u.role === 'student') return r.status(403).json({ message: 'This is a student account. Choose the Student tab.' });
   r.json({ token: sign(u), user: { ...u.toObject(), password: undefined } });
 }));
 
@@ -39,7 +41,8 @@ R.post('/change-password', auth(), h(async (q, r) => {
   const u = await User.findById(q.user._id);
   if (!(await bcrypt.compare(current || '', u.password))) return r.status(400).json({ message: 'Current password is wrong' });
   if (!next || next.length < 6) return r.status(400).json({ message: 'New password must be at least 6 characters' });
-  u.password = await bcrypt.hash(next, 10); await u.save();
+  if (next === current) return r.status(400).json({ message: 'Choose a different password from the current one' });
+  u.password = await bcrypt.hash(next, 10); u.mustChange = false; await u.save();
   r.json({ message: 'Password updated' });
 }));
 

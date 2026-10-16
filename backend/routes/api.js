@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { auth } from '../middleware/auth.js';
 import { POLICY, istNow } from '../config.js';
 import { notify, studentIds, staffIds } from '../notify.js';
-import { User, Course, Subject, Attendance, Assignment, Submission, Notice, Leave, Timetable, Holiday, Fee } from '../models.js';
+import { User, Setting, Course, Subject, Attendance, Assignment, Submission, Notice, Leave, Timetable, Holiday, Fee } from '../models.js';
 
 const R = Router();
 const h = f => (q, r, n) => f(q, r, n).catch(n);
@@ -14,19 +15,23 @@ const mySubjects = u => u.role === 'student' ? Subject.find(classQ(u)) : ADM.inc
 const fail = (r, m, c = 400) => r.status(c).json({ message: m });
 const paid = f => (f.payments || []).reduce((a, p) => a + p.amount, 0);
 const bad = m => Object.assign(new Error(m), { status: 400 });
+const randomPw = () => crypto.randomBytes(6).toString('base64url').slice(0, 8) + '#7';
+const defaultPw = async () => (await Setting.findOne({ key: 'defaultPassword' }))?.value || process.env.DEFAULT_PASSWORD || 'Welcome@123';
+const checkClass = async b => {
+  const c = await Course.findOne({ code: String(b.course || '').toUpperCase() });
+  if (!c) throw bad('Unknown course. Use a code from Courses (e.g. BTECH, MBA).');
+  const sem = Number(b.semester);
+  if (!(sem >= 1 && sem <= c.years * 2)) throw bad(`Semester must be between 1 and ${c.years * 2} for ${c.code}`);
+  if (b.branch && !c.branches.includes(b.branch)) throw bad(`Branch "${b.branch}" does not exist for ${c.code}`);
+  return c.code;
+};
+// mustChange here only means "still on the common default password" (shows a gentle reminder, never blocks login)
 const mkUser = async b => {
   const role = b.role || 'student';
-  if (role === 'student') {
-    const c = await Course.findOne({ code: String(b.course || '').toUpperCase() });
-    if (!c) throw bad('Unknown course. Use a code from Courses (e.g. BTECH, MBA).');
-    b = { ...b, course: c.code }; const sem = Number(b.semester);
-    if (!(sem >= 1 && sem <= c.years * 2)) throw bad(`Semester must be between 1 and ${c.years * 2} for ${c.code}`);
-    if (b.branch && !c.branches.includes(b.branch)) throw bad(`Branch "${b.branch}" does not exist for ${c.code}`);
-    if (!b.roll) throw bad('Roll number is required for students');
-  }
+  if (role === 'student') { b = { ...b, course: await checkClass(b) }; if (!b.roll) throw bad('Roll number is required for students'); }
   const username = String(b.username || b.roll || '').toLowerCase().trim();
-  if (!b.name || !username) throw Object.assign(new Error('Name and username/roll are required'), { status: 400 });
-  return { ...b, role, username, password: await bcrypt.hash(String(b.password || b.roll || 'Welcome@123'), 10) };
+  if (!b.name || !username) throw bad('Name and username/roll are required');
+  return { ...b, role, username, mustChange: true, password: await bcrypt.hash(String(b.password), 10) };
 };
 
 // ---------- Courses ----------
@@ -62,26 +67,45 @@ R.get('/users', auth(...STAFF, 'accountant'), h(async (q, r) => {
   if (q.query.q) { const re = new RegExp(esc(q.query.q), 'i'); f.$or = [{ name: re }, { roll: re }, { username: re }]; }
   r.json(await User.find(f).select('-password').sort('name').limit(500));
 }));
-R.post('/users', auth('admin'), h(async (q, r) => { const u = await User.create(await mkUser(q.body)); r.json({ ...u.toObject(), password: undefined }); }));
-R.post('/users/bulk', auth('admin'), h(async (q, r) => {
-  let ok = 0; const skipped = [];
+const MANAGE = { admin: ['student', 'teacher', 'hod', 'accountant', 'admin'], hod: ['student', 'teacher'] };
+const can = (u, role) => (MANAGE[u.role] || []).includes(role);
+R.post('/users', auth(...ADM), h(async (q, r) => {
+  const role = q.body.role || 'student'; if (!can(q.user, role)) return fail(r, 'You cannot create this type of account', 403);
+  const plain = String(q.body.password || await defaultPw()); if (plain.length < 4) return fail(r, 'Password must be at least 4 characters');
+  const u = await User.create(await mkUser({ ...q.body, role, password: plain }));
+  r.json({ ...u.toObject(), password: undefined, login: { username: u.username, password: plain } });
+}));
+R.post('/users/bulk', auth(...ADM), h(async (q, r) => {
+  const role = q.body.role === 'teacher' ? 'teacher' : 'student'; if (!can(q.user, role)) return fail(r, 'Not allowed', 403);
+  const plain = await defaultPw(); let ok = 0; const skipped = [];
   for (const row of (q.body.rows || []).slice(0, 1000)) {
-    try { await User.create(await mkUser({ ...row, role: 'student' })); ok++; } catch (e) { skipped.push(row.roll || row.name || '?'); }
+    try { await User.create(await mkUser({ ...row, role, password: plain })); ok++; }
+    catch (e) { skipped.push({ row: row.roll || row.username || row.name || '?', reason: e.code === 11000 ? 'Already exists' : e.message }); }
   }
-  r.json({ created: ok, skipped });
+  r.json({ created: ok, skipped, password: plain });
 }));
-R.put('/users/:id', auth('admin'), h(async (q, r) => {
-  const { password, username, ...rest } = q.body;
-  r.json(await User.findByIdAndUpdate(q.params.id, rest, { new: true }).select('-password'));
+R.put('/users/:id', auth(...ADM), h(async (q, r) => {
+  const t = await User.findById(q.params.id); if (!t) return fail(r, 'User not found', 404); if (!can(q.user, t.role)) return fail(r, 'Not allowed', 403);
+  const { name, phone, email, course, branch, semester, section } = q.body, upd = { name: name ?? t.name, phone, email };
+  if (t.role === 'student') Object.assign(upd, { course: await checkClass({ course, branch, semester }), branch: branch || '', semester: Number(semester), section: section || '' });
+  Object.assign(t, upd); await t.save(); r.json({ ...t.toObject(), password: undefined });
 }));
-R.post('/users/:id/reset-password', auth('admin'), h(async (q, r) => {
+R.post('/users/:id/reset-password', auth(...ADM), h(async (q, r) => {
+  const u = await User.findById(q.params.id); if (!u) return fail(r, 'User not found', 404); if (!can(q.user, u.role)) return fail(r, 'Not allowed', 403);
+  const pw = String(q.body.password || await defaultPw()); if (pw.length < 4) return fail(r, 'Password must be at least 4 characters');
+  u.password = await bcrypt.hash(pw, 10); u.mustChange = true; await u.save(); r.json({ message: 'Password reset', login: { username: u.username, password: pw } });
+}));
+R.delete('/users/:id', auth(...ADM), h(async (q, r) => {
   const u = await User.findById(q.params.id); if (!u) return fail(r, 'User not found', 404);
-  const pw = q.body.password || u.roll || 'Welcome@123';
-  u.password = await bcrypt.hash(String(pw), 10); await u.save(); r.json({ message: 'Password reset to ' + (q.body.password ? 'the new value' : 'roll number / Welcome@123') });
+  if (String(q.user._id) === q.params.id) return fail(r, 'You cannot deactivate yourself'); if (!can(q.user, u.role)) return fail(r, 'Not allowed', 403);
+  u.active = false; await u.save(); r.json({ ok: true });
 }));
-R.delete('/users/:id', auth('admin'), h(async (q, r) => {
-  if (String(q.user._id) === q.params.id) return fail(r, 'You cannot deactivate yourself');
-  await User.findByIdAndUpdate(q.params.id, { active: false }); r.json({ ok: true });
+
+// ---------- Settings (admin) ----------
+R.get('/settings', auth('admin'), h(async (q, r) => r.json({ defaultPassword: await defaultPw() })));
+R.put('/settings', auth('admin'), h(async (q, r) => {
+  const v = String(q.body.defaultPassword || '').trim(); if (v.length < 6) return fail(r, 'Default password must be at least 6 characters');
+  await Setting.updateOne({ key: 'defaultPassword' }, { value: v }, { upsert: true }); r.json({ message: 'Default password updated' });
 }));
 
 // ---------- Attendance ----------
@@ -302,6 +326,7 @@ R.get('/dashboard', auth(), h(async (q, r) => {
   }
   const subs = await mySubjects(u), pend = await Leave.countDocuments({ status: 'Pending' });
   const base = { role: u.role, holidays, students: await User.countDocuments({ role: 'student', active: true }), pendingLeaves: pend, subjects: subs.length, assignments: await Assignment.countDocuments(ADM.includes(u.role) ? {} : { subject: { $in: subs.map(s => s._id) } }) };
+  if (ADM.includes(u.role)) base.setup = { courses: await Course.countDocuments(), teachers: await User.countDocuments({ role: 'teacher', active: true }), subjects: await Subject.countDocuments(), students: base.students, timetable: await Timetable.countDocuments() };
   if (u.role === 'teacher') base.today = await Timetable.find({ day, subject: { $in: subs.map(s => s._id) } }).populate('subject', 'name').sort('start');
   if (FIN.includes(u.role)) { const all = await Fee.find().lean(); base.feeTotal = all.reduce((a, f) => a + f.amount, 0); base.feeCollected = all.reduce((a, f) => a + paid(f), 0); }
   r.json(base);

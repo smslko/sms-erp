@@ -9,7 +9,7 @@ export const User = model('User', new Schema({
   password: { type: String, required: true },
   role: { type: String, enum: ['admin', 'hod', 'teacher', 'student', 'accountant'], required: true },
   roll: { type: String, trim: true }, course: { type: String, default: '' }, branch: { type: String, default: '' },
-  semester: Number, section: { type: String, default: '' }, phone: String, email: String, photo: ref('File'), active: { type: Boolean, default: true },
+  semester: Number, section: { type: String, default: '' }, phone: String, email: String, photo: ref('File'), mustChange: { type: Boolean, default: false }, active: { type: Boolean, default: true },
 }, opt));
 
 export const Course = model('Course', new Schema({
@@ -84,3 +84,5 @@ export const Exam = model('Exam', new Schema({
 export const Notification = model('Notification', new Schema({
   user: { ...ref('User'), required: true, index: true }, title: String, body: String, link: { type: String, default: '/' }, read: { type: Boolean, default: false },
 }, opt).index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 90 }));
+
+export const Setting = model('Setting', new Schema({ key: { type: String, unique: true }, value: String }, opt));

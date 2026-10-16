@@ -1,9 +1,17 @@
+import { Link } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useGet, Card, Table, fmt, inr } from '../ui';
 import { AttBars } from '../charts';
 
 const Stat = ({ v, l }) => <div className="stat clay"><b>{v}</b><span>{l}</span></div>;
 const Hol = ({ list }) => <Card title="Upcoming holidays"><Table head={['Holiday', 'Date']} rows={(list || []).map(h => [h.name, fmt(h.from) + (h.to !== h.from ? ' – ' + fmt(h.to) : '')])} empty="No upcoming holidays." /></Card>;
+
+function Setup({ s, role }) {
+  const steps = [['Check courses and branches', s.courses > 0, '/courses', 'Open Courses', role === 'admin'], ['Add teachers', s.teachers > 0, '/users?role=teacher', 'Add teachers'], ['Add subjects and assign teachers', s.subjects > 0, '/subjects', 'Add subjects'],
+    ['Add students (one by one or bulk import)', s.students > 0, '/users?role=student', 'Add students'], ['Create the timetable', s.timetable > 0, '/timetable', 'Open timetable']].filter(x => x[4] !== false);
+  if (steps.every(x => x[1])) return null;
+  return <Card title="Getting started"><p className="mut">Follow these steps once. Each step turns green when done.</p><div className="steps">{steps.map(([t, ok, to, b], i) => <div key={t} className={'step' + (ok ? ' done' : '')}><span className="n">{ok ? '✓' : i + 1}</span><div><b>{t}</b></div><Link className="btn o s" to={to}>{b}</Link></div>)}</div></Card>;
+}
 
 export default function Dashboard() {
   const { user } = useAuth(), [d] = useGet('/dashboard'), [notices] = useGet('/notices');
@@ -17,6 +25,7 @@ export default function Dashboard() {
       <Card title="Subject-wise attendance"><AttBars rows={d.subjects.map(s => ({ label: s.subject.code, pct: s.pct }))} min={d.min} /><Table head={['Subject', 'P', 'Total', '%']} rows={d.subjects.map(s => [s.subject.name, s.counted, s.total, <b className={s.pct != null && s.pct < d.min ? 'no' : 'ok'}>{s.pct ?? '–'}{s.pct != null && '%'}</b>])} /></Card>
       <Hol list={d.holidays} /></div></>;
   return <>
+    {d.setup && <Setup s={d.setup} role={d.role} />}
     <div className="stats"><Stat v={d.students} l="Students" /><Stat v={d.subjects} l="Subjects" /><Stat v={d.assignments} l="Assignments" />{['admin', 'hod', 'teacher'].includes(d.role) && <Stat v={d.pendingLeaves} l="Pending leaves" />}
       {d.feeTotal != null && <><Stat v={inr(d.feeCollected)} l="Fees collected" /><Stat v={inr(d.feeTotal - d.feeCollected)} l="Fees outstanding" /></>}</div>
     <div className="grid">{d.today && TT}{NB}<Hol list={d.holidays} /></div></>;
